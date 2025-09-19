@@ -9,6 +9,14 @@ class QuestionRequest(BaseModel):
         default=None,
         description="Override the number of documents to retrieve from the knowledge base.",
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Conversation/session identifier for follow-up context.",
+    )
+    user_id: Optional[str] = Field(
+        default=None,
+        description="Optional user identifier used to scope sessions.",
+    )
 
 
 class RetrievedChunk(BaseModel):
@@ -35,3 +43,31 @@ class IngestUrlRequest(BaseModel):
         default=None,
         description="Optional title to associate with the fetched content.",
     )
+
+
+class CreateSessionRequest(BaseModel):
+    user_id: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+
+
+class CreateSessionResponse(BaseModel):
+    session_id: str
+
+
+class ConversationMessage(BaseModel):
+    role: str
+    content: str
+    created_at: str
+
+
+class ConversationHistoryResponse(BaseModel):
+    summary: Optional[str]
+    messages: List[ConversationMessage]
+
+
+class ConversationMetadata(BaseModel):
+    id: str
+    title: Optional[str]
+    user_id: Optional[str]
+    created_at: str
+    updated_at: str

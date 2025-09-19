@@ -43,6 +43,8 @@ Production-ready RAG-powered nutrition assistant with a FastAPI backend and Stre
 - `HYBRID_ALPHA=0.6` – weighting between dense (alpha) and keyword (1-alpha) scores.
 - `ENABLE_RERANK=true` / `RERANK_PROVIDER=cohere|local|none` – rerank candidates with Cohere ReRank when available or a lightweight local heuristic fallback.
 - `VECTOR_BACKEND=faiss|pgvector` – select the vector store. When using `pgvector`, set `POSTGRES_DSN=postgresql+psycopg2://user:pass@host:5432/db`.
+- `ENABLE_MEMORY=true` – persist conversational state in SQLite (default `backend/memory.db`) or Postgres; configure with `MEMORY_BACKEND` / `MEMORY_DSN`.
+- `HISTORY_WINDOW`, `SUMMARY_EVERY_N_TURNS`, `SUMMARY_MAX_TOKENS` – tune how much prior conversation is injected via the summary buffer.
 - `CHUNKER=token|char`, `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS` – configure the token-aware splitter.
 - Loader toggles (`ENABLE_PDF_LOADER`, `ENABLE_DOCX_LOADER`, `ENABLE_WEB_LOADER`) let you opt out of specific parsers.
 
@@ -65,6 +67,8 @@ Production-ready RAG-powered nutrition assistant with a FastAPI backend and Stre
 
 ## Using the app
 - Seed documents by placing `.txt`, `.md`, `.pdf`, `.docx`, or `.url` link files inside `backend/data/`. Use the Streamlit uploader or `/api/ingest_url` for runtime additions.
+- Use the session endpoints (`/api/sessions/...`) to create and manage persistent conversations. Pass `session_id` (and optionally `user_id`) to `/api/ask` to enable follow-up questions that remember prior context.
+- The Streamlit sidebar now exposes "New conversation" and session selection so you can manage threads directly from the UI. Set an optional user ID to scope sessions per user.
 - Ask targeted questions (e.g., "How much protein for marathon training?") and review the retrieved context. Each chunk shows the originating section, page (if applicable), and chunk index for traceability.
 - Hybrid retrieval and reranking can be toggled via env variables—experiment to balance speed vs. quality.
 - The backend persists the FAISS index under `backend/vector_store/`; delete that folder (or switch `VECTOR_BACKEND`) to rebuild from scratch.
@@ -74,6 +78,8 @@ Production-ready RAG-powered nutrition assistant with a FastAPI backend and Stre
 - Ask a question before and after ingesting new PDFs/DOCX files to observe enriched metadata in the Streamlit context panel.
 - Toggle `ENABLE_HYBRID` / `ENABLE_RERANK` and compare `context` ordering from `/api/ask`.
 - If using Postgres, confirm persistence across restarts by pointing multiple backend instances at the same DSN.
+- Test conversational memory: `POST /api/sessions/create`, call `/api/ask` with the returned `session_id` for multi-turn queries, then inspect `/api/sessions/{session_id}/history` after a restart.
+- Run automated checks (unit + integration): `./scripts/run_tests.sh`
 
 ## Customization tips
 - Swap the OpenAI or Cohere models via environment overrides (e.g., GPT-4o, Cohere `rerank-3`).

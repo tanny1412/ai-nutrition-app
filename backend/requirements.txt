@@ -8,6 +8,7 @@ openai
 python-dotenv
 pydantic
 python-multipart
+langgraph>=0.1.7
 rank-bm25>=0.2.2
 pypdf>=3.9.0
 python-docx>=1.1.0
@@ -17,12 +18,3 @@ cohere>=5.5.8
 psycopg2-binary>=2.9.9
 sqlalchemy>=2.0.32
 pgvector>=0.2.5
-rank-bm25
-pypdf
-python-docx
-trafilatura
-tiktoken
-cohere
-psycopg2-binary
-sqlalchemy
-pgvector

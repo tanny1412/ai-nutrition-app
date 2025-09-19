@@ -19,6 +19,7 @@ from rank_bm25 import BM25Okapi
 import tiktoken
 
 from ..config import get_settings
+from .memory_service import MemoryService, get_memory_service
 
 
 @dataclass
@@ -422,6 +423,12 @@ class RAGService:
             temperature=self.settings.temperature,
             max_tokens=self.settings.max_tokens,
         )
+        self._summary_llm = ChatOpenAI(
+            api_key=self.settings.openai_api_key,
+            model=self.settings.chat_model,
+            temperature=0.0,
+            max_tokens=self.settings.summary_max_tokens,
+        )
         self._encoding = self._resolve_encoding(self.settings.chat_model)
         splitter_model = self.settings.embedding_model if self.settings.chunker == "token" else self.settings.chat_model
         self._splitter = _build_splitter(
@@ -448,6 +455,12 @@ class RAGService:
             rerank_top_n=self.settings.rerank_top_n,
         )
 
+        self._memory_service: Optional[MemoryService] = get_memory_service()
+        if self.settings.enable_memory and not self._memory_service:
+            raise RuntimeError("Memory is enabled but could not initialize the memory service. Check MEMORY_DSN settings.")
+        if not self.settings.enable_memory:
+            self._memory_service = None
+
         initial_chunks = self._bootstrap_corpus()
         if not initial_chunks and self._vector_provider.is_empty():
             raise RuntimeError(
@@ -464,7 +477,21 @@ class RAGService:
                 ),
                 (
                     "human",
-                    "Context:\n{context}\n\nQuestion: {question}\n\nRespond with a concise answer and include a bullet list of key points.",
+                    "Conversation memory:\n{memory}\n\nContext:\n{context}\n\nQuestion: {question}\n\nRespond with a concise answer and include a bullet list of key points.",
+                ),
+            ],
+        )
+        self._summary_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are summarizing an ongoing conversation between a user and a nutrition coach assistant. "
+                    "Capture key goals, constraints, dietary preferences, and decisions without inventing information. "
+                    "Keep the summary under {summary_max_tokens} tokens.",
+                ),
+                (
+                    "human",
+                    "Previous summary (may be empty):\n{previous_summary}\n\nRecent conversation transcript:\n{transcript}\n\nProvide an updated summary in plain text.",
                 ),
             ],
         )
@@ -630,11 +657,27 @@ class RAGService:
         self._vector_provider.persist()
         return len(chunks)
 
-    def answer(self, question: str, top_k: int | None = None) -> dict:
+    def answer(
+        self,
+        question: str,
+        top_k: int | None = None,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> dict:
         """Run retrieval + generation and return the answer with supporting chunks."""
         k = top_k or self.settings.top_k
         if k <= 0:
             k = self.settings.top_k
+
+        memory_text = ""
+        memory_tokens = 0
+        conversation_id: Optional[str] = None
+        if session_id and self._memory_service:
+            conversation_id = session_id
+            self._memory_service.ensure_conversation(conversation_id, user_id=user_id)
+            memory_text = self._build_memory_text(conversation_id)
+            if memory_text:
+                memory_tokens = len(self._encoding.encode(memory_text))
 
         retrieved = self._pipeline.retrieve(question, k)
         if not retrieved:
@@ -642,21 +685,31 @@ class RAGService:
                 "I could not find relevant information in the knowledge base yet. "
                 "Please add more nutrition documents and try again."
             )
+            if conversation_id and self._memory_service:
+                self._persist_turn(conversation_id, question, answer_text)
             return {"answer": answer_text, "context": []}
 
-        selected_chunks, context = self._build_context(retrieved)
-        messages = self._prompt.format_messages(context=context, question=question)
+        available_tokens = self.settings.max_input_tokens - memory_tokens
+        if available_tokens <= 0:
+            available_tokens = self.settings.chunk_size_tokens
+
+        selected_chunks, context = self._build_context(retrieved, available_tokens)
+        prompt_memory = memory_text or "None"
+        messages = self._prompt.format_messages(memory=prompt_memory, context=context, question=question)
         response = self._llm.invoke(messages)
         answer_text = response.content
+
+        if conversation_id and self._memory_service:
+            self._persist_turn(conversation_id, question, answer_text)
 
         return {
             "answer": answer_text,
             "context": selected_chunks,
         }
 
-    def _build_context(self, chunks: Sequence[Dict[str, object]]) -> Tuple[List[Dict[str, object]], str]:
+    def _build_context(self, chunks: Sequence[Dict[str, object]], token_budget: int) -> Tuple[List[Dict[str, object]], str]:
         selected: List[Dict[str, object]] = []
-        token_budget = self.settings.max_input_tokens
+        token_budget = max(token_budget, 0)
         tokens_used = 0
         for chunk in chunks:
             content = chunk.get("content", "")
@@ -678,6 +731,71 @@ class RAGService:
             )
         context = "\n\n".join(entry["content"] for entry in selected)
         return selected, context
+
+    def _build_memory_text(self, conversation_id: str) -> str:
+        if not self._memory_service:
+            return ""
+        try:
+            summary = self._memory_service.get_summary(conversation_id)
+            history_limit = max(self.settings.history_window * 2, 0)
+            recent_messages = self._memory_service.get_recent_messages(conversation_id, history_limit)
+        except Exception:  # pragma: no cover - memory fetch failure should not break answer
+            return ""
+
+        sections: List[str] = []
+        if summary:
+            sections.append(f"Summary:\n{summary.strip()}")
+        if recent_messages:
+            dialog_lines = []
+            for message in recent_messages:
+                speaker = "User" if message.role == "user" else "Assistant"
+                dialog_lines.append(f"{speaker}: {message.content.strip()}")
+            sections.append("Recent dialogue:\n" + "\n".join(dialog_lines))
+        return "\n\n".join(sections)
+
+    def _persist_turn(self, conversation_id: str, user_message: str, assistant_message: str) -> None:
+        if not self._memory_service:
+            return
+        try:
+            self._memory_service.append_message(conversation_id, "user", user_message)
+            self._memory_service.append_message(conversation_id, "assistant", assistant_message)
+            self._memory_service.set_title_if_absent(conversation_id, user_message[:80])
+            self._maybe_update_summary(conversation_id)
+        except Exception:  # pragma: no cover - persistence failures should not crash
+            return
+
+    def _maybe_update_summary(self, conversation_id: str) -> None:
+        if not self._memory_service:
+            return
+        try:
+            total_messages = self._memory_service.get_message_count(conversation_id)
+        except Exception:  # pragma: no cover
+            return
+        turns = total_messages // 2
+        if turns == 0 or turns % self.settings.summary_every_n_turns != 0:
+            return
+
+        try:
+            existing_summary = self._memory_service.get_summary(conversation_id) or ""
+            messages = self._memory_service.iter_messages(conversation_id)
+            window = max(self.settings.history_window * 4, 20)
+            if window > 0:
+                messages = messages[-window:]
+            transcript_lines = []
+            for message in messages:
+                speaker = "User" if message.role == "user" else "Assistant"
+                transcript_lines.append(f"{speaker}: {message.content.strip()}")
+            transcript = "\n".join(transcript_lines)
+            summary_messages = self._summary_prompt.format_messages(
+                previous_summary=existing_summary or "(none)",
+                transcript=transcript,
+                summary_max_tokens=self.settings.summary_max_tokens,
+            )
+            result = self._summary_llm.invoke(summary_messages)
+            summary_text = result.content.strip()
+            self._memory_service.set_summary(conversation_id, summary_text)
+        except Exception:  # pragma: no cover
+            return
 
 
 

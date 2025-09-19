@@ -60,6 +60,15 @@ class Settings(BaseModel):
     max_tokens: int = Field(default_factory=lambda: max(_get_env_int("OPENAI_MAX_TOKENS", 512), 1))
     temperature: float = Field(default_factory=lambda: _get_env_float("OPENAI_TEMPERATURE", 0.3))
 
+    enable_memory: bool = Field(default_factory=lambda: _get_env_bool("ENABLE_MEMORY", True))
+    memory_backend: str = Field(
+        default_factory=lambda: _get_env_choice("MEMORY_BACKEND", "sqlite", {"sqlite", "postgres"}),
+    )
+    memory_dsn: str = Field(default_factory=lambda: os.getenv("MEMORY_DSN", "sqlite:///backend/memory.db"))
+    history_window: int = Field(default_factory=lambda: max(_get_env_int("HISTORY_WINDOW", 6), 0))
+    summary_every_n_turns: int = Field(default_factory=lambda: max(_get_env_int("SUMMARY_EVERY_N_TURNS", 6), 1))
+    summary_max_tokens: int = Field(default_factory=lambda: max(_get_env_int("SUMMARY_MAX_TOKENS", 800), 100))
+
     enable_rerank: bool = Field(default_factory=lambda: _get_env_bool("ENABLE_RERANK", True))
     rerank_provider: str = Field(
         default_factory=lambda: _get_env_choice("RERANK_PROVIDER", "cohere", {"cohere", "local", "none"}),
@@ -102,6 +111,27 @@ class Settings(BaseModel):
             self.temperature = max(0.0, min(float(self.temperature), 2.0))
         except Exception:
             self.temperature = 0.3
+
+        # History window must be non-negative and not excessive
+        try:
+            window = int(self.history_window)
+        except Exception:
+            window = 6
+        self.history_window = max(window, 0)
+
+        # Summary cadence
+        try:
+            cadence = int(self.summary_every_n_turns)
+        except Exception:
+            cadence = 6
+        self.summary_every_n_turns = max(cadence, 1)
+
+        # Summary token cap
+        try:
+            summary_tokens = int(self.summary_max_tokens)
+        except Exception:
+            summary_tokens = 800
+        self.summary_max_tokens = max(summary_tokens, 100)
 
         # Hybrid alpha in [0, 1]
         try:
