@@ -1,87 +1,136 @@
-# AI Nutrition App
+# AI Nutrition Assistant
 
-Production-ready RAG-powered nutrition assistant with a FastAPI backend and Streamlit front end. The backend builds a retrieval pipeline that indexes heterogeneous nutrition documents, enriches metadata, and uses OpenAI (plus optional Cohere) models to generate evidence-based responses. The Streamlit UI lets users upload new notes and ask questions backed by their curated knowledge base.
+An end‑to‑end nutrition chatbot with Retrieval‑Augmented Generation (RAG), per‑user memory, and clean FastAPI endpoints. It supports hybrid retrieval (dense vectors + BM25), optional reranking, and flexible, LLM‑driven personal memory.
 
-## Architecture
-- **FastAPI** (`backend/app`): hosts ingestion and question-answering endpoints, manages hybrid dense/keyword retrieval, optional reranking, and vector store backends (FAISS or pgvector).
-- **Retrieval pipeline**: token-aware chunking (tiktoken-based) with section-aware metadata, dense embeddings (OpenAI) plus BM25 keyword search, optional Cohere/Local reranker, and configurable ensemble weighting.
-- **Document loaders**: text/markdown, PDF (via `pypdf`), DOCX (`python-docx`), and web pages (`trafilatura`). Uploads share rich metadata including title, section, chunk indices, and page numbers.
-- **Vector stores**: default FAISS on disk; optional managed Postgres (`pgvector`) backend for multi-instance deployments.
-- **Streamlit** (`frontend/app.py`): lightweight client for uploading nutrition references, ingesting URLs, and chatting with the assistant. Retrieved context displays section, page, and chunk ordering for transparency.
+Features
+- Hybrid RAG: FAISS dense vectors (OpenAI embeddings) + BM25 keyword search with score ensembling.
+- Optional reranking: Cohere reranker or a lightweight local reranker.
+- LLM‑driven memory: Stores and recalls personal facts per user. Flexible extraction and answering from memory.
+- Conversation persistence: Per‑session summaries and history with SQLite/Postgres via SQLAlchemy.
+- Data ingestion: Text/Markdown/PDF/DOCX and URLs, with configurable loaders.
+- Config‑first: All major behaviors are controlled through environment variables.
 
-## Prerequisites
+Architecture
+- Backend
+  - FastAPI app with routes for asking questions, ingesting content, and managing sessions.
+  - RAG Service: Chunking, vector/keyword retrieval, hybrid ensembling, and context construction.
+  - Memory Service: SQL‑backed conversations, summaries, and user key‑value memory.
+  - Agent Pipelines:
+    - SimpleAgenticPipeline: LangChain conversation memory per user (in‑process) + RAG enhancement.
+    - AgenticPipeline: Graph‑based router with LLM‑driven personal memory extraction/recall and RAG/chitchat routes.
+- Frontend
+  - Minimal example app in `frontend/` (you can wire to your UI of choice).
+
+Key Files
+- Backend API routes: `backend/app/api/routes.py`
+- RAG service: `backend/app/services/rag_service.py`
+- Persistent memory service: `backend/app/services/memory_service.py`
+- Simple pipeline: `backend/app/services/simple_agentic_pipeline.py`
+- Advanced agentic pipeline: `backend/app/services/agentic_pipeline.py`
+- Settings: `backend/app/config.py`
+
+RAG Overview
+- Dense vectors: FAISS (local, persisted under `backend/vector_store`) or pgvector (Postgres).
+- Keyword index: BM25 (rank_bm25) for lexical matching.
+- Hybrid: Scores from dense and BM25 are normalized and combined (see `ENABLE_HYBRID` and `HYBRID_ALPHA`).
+- Reranking (optional): Cohere (`RERANK_PROVIDER=cohere`) or local heuristic (`RERANK_PROVIDER=local`).
+- Context assembly: Token‑aware chunk selection under a configurable budget with a focused answer prompt.
+
+Personal Memory
+- Advanced pipeline uses the LLM to:
+  - classify intent (memory vs rag vs chitchat),
+  - extract personal facts (name, likes, allergies, goals, preferences, etc.),
+  - answer personal questions using only stored memory.
+- Memory is keyed by `user_id`. New conversations reuse the same user memory.
+
+Quickstart
+1) Prerequisites
 - Python 3.10+
-- OpenAI API key with access to `gpt-3.5-turbo` (or update the model names in `.env`).
-- (Optional) Cohere API key for best-quality reranking.
-- (Optional) Postgres database with the `pgvector` extension enabled if you opt into managed storage.
+- OpenAI API Key
 
-## Setup
+2) Setup
+- Create a `.env` (see `.env.example`) with your keys:
+  - `OPENAI_API_KEY="sk-..."`
+  - Optional: `COHERE_API_KEY` for reranking, Postgres DSN for pgvector, etc.
 
-1. **Clone repo & create virtual environments**
-   ```bash
-   python -m venv .venv-backend
-   source .venv-backend/bin/activate
-   pip install -r backend/requirements.txt
-   ```
+3) Install
+```
+pip install -r backend/requirements.txt
+```
 
-   For the Streamlit client:
-   ```bash
-   python -m venv .venv-frontend
-   source .venv-frontend/bin/activate
-   pip install -r frontend/requirements.txt
-   ```
+4) Run the API
+```
+uvicorn backend.app.main:app --reload
+```
+By default the app exposes routes under `/api` (see below).
 
-2. **Configure environment variables**
-   ```bash
-   cp .env.example .env
-   # edit .env and set OPENAI_API_KEY=...
-   ```
-   The backend automatically loads `.env`. Adjust feature flags or model names as needed.
+5) Ingest Data (optional but recommended)
+- Add files under `backend/app/data` (txt/md/mdx/pdf/docx) or ingest via API:
+```
+POST /api/ingest { "content": "your text", "title": "Optional Title" }
+POST /api/ingest_url { "url": "https://...", "title": "Optional Title" }
+```
 
-### Notable environment toggles
-- `ENABLE_HYBRID=true` – blend dense embeddings with BM25 keyword search (default on).
-- `HYBRID_ALPHA=0.6` – weighting between dense (alpha) and keyword (1-alpha) scores.
-- `ENABLE_RERANK=true` / `RERANK_PROVIDER=cohere|local|none` – rerank candidates with Cohere ReRank when available or a lightweight local heuristic fallback.
-- `VECTOR_BACKEND=faiss|pgvector` – select the vector store. When using `pgvector`, set `POSTGRES_DSN=postgresql+psycopg2://user:pass@host:5432/db`.
-- `ENABLE_MEMORY=true` – persist conversational state in SQLite (default `backend/memory.db`) or Postgres; configure with `MEMORY_BACKEND` / `MEMORY_DSN`.
-- `HISTORY_WINDOW`, `SUMMARY_EVERY_N_TURNS`, `SUMMARY_MAX_TOKENS` – tune how much prior conversation is injected via the summary buffer.
-- `CHUNKER=token|char`, `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS` – configure the token-aware splitter.
-- Loader toggles (`ENABLE_PDF_LOADER`, `ENABLE_DOCX_LOADER`, `ENABLE_WEB_LOADER`) let you opt out of specific parsers.
+API Endpoints (selected)
+- Health: `GET /api/health`
+- Ask: `POST /api/ask`
+  - body: `{ user_id?: string, session_id?: string, question: string, top_k?: number }`
+  - returns: `{ answer: string, context: RetrievedChunk[] }`
+- Ingest text: `POST /api/ingest` → `{ chunks_indexed: number }`
+- Ingest URL: `POST /api/ingest_url` → `{ chunks_indexed: number }`
+- Sessions
+  - `POST /api/sessions/create` → `{ session_id }`
+  - `GET /api/sessions/list?user_id=...` → list of sessions
+  - `GET /api/sessions/{session_id}/history` → summary + messages
+  - `POST /api/sessions/{session_id}/reset` → reset messages/summary
+  - `DELETE /api/sessions/{session_id}` → delete session
+- Simple conversation history (in‑process memory)
+  - `GET /api/conversation/{user_id}/history`
+  - `DELETE /api/conversation/{user_id}`
 
-## Running the stack
+Configuration (env)
+- OpenAI
+  - `OPENAI_API_KEY` (required)
+  - `OPENAI_CHAT_MODEL` (default: `gpt-3.5-turbo`)
+  - `OPENAI_EMBEDDING_MODEL` (default: `text-embedding-3-small`)
+  - `OPENAI_TEMPERATURE` (default: `0.3`)
+- RAG
+  - `RAG_TOP_K` (default: `4`)
+  - `ENABLE_HYBRID` (default: `true`), `HYBRID_ALPHA` (default: `0.5`)
+  - `ENABLE_RERANK` (default: `true`), `RERANK_PROVIDER` (`cohere|local|none`), `RERANK_TOP_N`
+  - `VECTOR_BACKEND` (`faiss|pgvector`), `POSTGRES_DSN` for pgvector
+  - Chunking: `CHUNKER` (`token|char`), `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS`, `MAX_INPUT_TOKENS`
+- Memory
+  - `ENABLE_MEMORY` (default: `true`)
+  - `MEMORY_BACKEND` (`sqlite|postgres`), `MEMORY_DSN` (default: `sqlite:///backend/memory.db`)
+  - Summaries: `HISTORY_WINDOW`, `SUMMARY_EVERY_N_TURNS`, `SUMMARY_MAX_TOKENS`
 
-1. **Start the FastAPI server**
-   ```bash
-   source .venv-backend/bin/activate
-   cd backend
-   uvicorn app.main:app --reload
-   ```
+Development
+- Run tests
+```
+pytest
+```
 
-2. **Launch the Streamlit UI**
-   ```bash
-   source .venv-frontend/bin/activate
-   streamlit run frontend/app.py
-   ```
+- Lint/format (suggested)
+```
+ruff check .
+black .
+```
 
-   The sidebar contains a "Ping backend" button; ensure it reports a healthy connection.
+Security & Privacy Notes
+- User memory stores personal information. Ensure you:
+  - secure your DB and vector store directories,
+  - implement auth on API routes,
+  - provide a “forget me” flow to delete user data,
+  - avoid logging PII.
+- FAISS loading uses `allow_dangerous_deserialization=True` for local persistence. Only load from trusted directories.
 
-## Using the app
-- Seed documents by placing `.txt`, `.md`, `.pdf`, `.docx`, or `.url` link files inside `backend/data/`. Use the Streamlit uploader or `/api/ingest_url` for runtime additions.
-- Use the session endpoints (`/api/sessions/...`) to create and manage persistent conversations. Pass `session_id` (and optionally `user_id`) to `/api/ask` to enable follow-up questions that remember prior context.
-- The Streamlit sidebar now exposes "New conversation" and session selection so you can manage threads directly from the UI. Set an optional user ID to scope sessions per user.
-- Ask targeted questions (e.g., "How much protein for marathon training?") and review the retrieved context. Each chunk shows the originating section, page (if applicable), and chunk index for traceability.
-- Hybrid retrieval and reranking can be toggled via env variables—experiment to balance speed vs. quality.
-- The backend persists the FAISS index under `backend/vector_store/`; delete that folder (or switch `VECTOR_BACKEND`) to rebuild from scratch.
+Roadmap Ideas
+- Add an authenticated “Forget Me” endpoint to purge user memory and sessions.
+- Add per‑(user, session) memory scoping in the simple pipeline.
+- Add observability (structured logs, latency and usage metrics).
+- Support additional rerankers and safety‑tuned prompts.
 
-## Testing and validation
-- Verify the API is alive: `curl http://localhost:8000/api/health`.
-- Ask a question before and after ingesting new PDFs/DOCX files to observe enriched metadata in the Streamlit context panel.
-- Toggle `ENABLE_HYBRID` / `ENABLE_RERANK` and compare `context` ordering from `/api/ask`.
-- If using Postgres, confirm persistence across restarts by pointing multiple backend instances at the same DSN.
-- Test conversational memory: `POST /api/sessions/create`, call `/api/ask` with the returned `session_id` for multi-turn queries, then inspect `/api/sessions/{session_id}/history` after a restart.
-- Run automated checks (unit + integration): `./scripts/run_tests.sh`
+License
+This project is for demonstration and educational purposes. Add a license file before distributing.
 
-## Customization tips
-- Swap the OpenAI or Cohere models via environment overrides (e.g., GPT-4o, Cohere `rerank-3`).
-- Extend `RAGService` with new loaders (e.g., CSV meal logs) or analytics endpoints in `backend/app/api/`.
-- Enhance the Streamlit UI with macro calculators, progress tracking, or integrations to nutrition trackers.
