@@ -1,0 +1,11 @@
+.venv*/
+__pycache__/
+*.pyc
+.env
+.env.*
+backend/vector_store/
+frontend/.streamlit/
+.streamlit/
+.DS_Store
+# Optional: editor/OS files
+*.swp
