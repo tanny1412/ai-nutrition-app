@@ -33,7 +33,12 @@ def ask_question(
     agent: SimpleAgenticPipeline = Depends(get_simple_agent_pipeline),
 ) -> AnswerResponse:
     try:
-        result = agent.ask(payload.user_id, payload.question)
+        result = agent.ask(
+            payload.user_id,
+            payload.question,
+            session_id=payload.session_id,
+            top_k=payload.top_k,
+        )
     except RuntimeError as exc:  # Typically missing API keys or no documents
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 

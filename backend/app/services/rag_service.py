@@ -686,7 +686,12 @@ class RAGService:
                 "Please add more nutrition documents and try again."
             )
             if conversation_id and self._memory_service:
-                self._persist_turn(conversation_id, question, answer_text)
+                self._persist_turn(
+                    conversation_id,
+                    question,
+                    answer_text,
+                    user_id=user_id,
+                )
             return {"answer": answer_text, "context": []}
 
         available_tokens = self.settings.max_input_tokens - memory_tokens
@@ -700,7 +705,12 @@ class RAGService:
         answer_text = response.content
 
         if conversation_id and self._memory_service:
-            self._persist_turn(conversation_id, question, answer_text)
+            self._persist_turn(
+                conversation_id,
+                question,
+                answer_text,
+                user_id=user_id,
+            )
 
         return {
             "answer": answer_text,
@@ -753,10 +763,19 @@ class RAGService:
             sections.append("Recent dialogue:\n" + "\n".join(dialog_lines))
         return "\n\n".join(sections)
 
-    def _persist_turn(self, conversation_id: str, user_message: str, assistant_message: str) -> None:
+    def _persist_turn(
+        self,
+        conversation_id: str,
+        user_message: str,
+        assistant_message: str,
+        *,
+        user_id: Optional[str] = None,
+    ) -> None:
         if not self._memory_service:
             return
         try:
+            if user_id:
+                self._memory_service.ensure_conversation(conversation_id, user_id=user_id)
             self._memory_service.append_message(conversation_id, "user", user_message)
             self._memory_service.append_message(conversation_id, "assistant", assistant_message)
             self._memory_service.set_title_if_absent(conversation_id, user_message[:80])

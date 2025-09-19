@@ -115,10 +115,23 @@ Guidelines:
         
         return "general"
     
-    def _enhance_with_rag(self, question: str, base_response: str) -> tuple[str, List[Dict[str, Any]]]:
+    def _enhance_with_rag(
+        self,
+        question: str,
+        base_response: str,
+        *,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        top_k: Optional[int] = None,
+    ) -> tuple[str, List[Dict[str, Any]]]:
         """Enhance the response with RAG information if needed"""
         try:
-            rag_result = self.rag_service.answer(question)
+            rag_result = self.rag_service.answer(
+                question,
+                top_k=top_k,
+                session_id=session_id,
+                user_id=user_id,
+            )
             rag_answer = rag_result.get("answer", "")
             rag_context = rag_result.get("context", [])
             
@@ -141,7 +154,14 @@ Please provide a comprehensive response that combines the base response with the
         
         return base_response, []
     
-    def ask(self, user_id: Optional[str], question: str) -> Dict[str, Any]:
+    def ask(
+        self,
+        user_id: Optional[str],
+        question: str,
+        *,
+        session_id: Optional[str] = None,
+        top_k: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Main method to process user questions"""
         uid = user_id or "anonymous"
         
@@ -167,7 +187,13 @@ Please provide a comprehensive response that combines the base response with the
         # Enhance with RAG if it's a nutrition question
         context = []
         if intent == "nutrition":
-            base_answer, context = self._enhance_with_rag(question, base_answer)
+            base_answer, context = self._enhance_with_rag(
+                question,
+                base_answer,
+                session_id=session_id,
+                user_id=user_id,
+                top_k=top_k,
+            )
         
         # Save the conversation
         memory.save_context(

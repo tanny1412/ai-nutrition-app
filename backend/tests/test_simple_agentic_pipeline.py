@@ -2,7 +2,32 @@ import pytest
 from unittest.mock import Mock, patch
 
 from backend.app.services.simple_agentic_pipeline import SimpleAgenticPipeline
-from backend.tests.test_agentic_pipeline import DummyRAGService
+
+
+class DummyRAGService:
+    """Minimal RAG stub used by simple pipeline tests."""
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def answer(self, question: str, top_k: int | None = None, session_id=None, user_id=None) -> dict:  # noqa: ARG002
+        self.calls.append(
+            {
+                "question": question,
+                "top_k": top_k,
+                "session_id": session_id,
+                "user_id": user_id,
+            }
+        )
+        return {
+            "answer": f"RAG: contextual answer for '{question}'",
+            "context": [
+                {
+                    "content": "Protein sources include beans and lentils.",
+                    "metadata": {"source": "test_doc.md"},
+                }
+            ],
+        }
 
 
 class TestSimpleAgenticPipeline:
